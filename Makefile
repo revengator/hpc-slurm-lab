@@ -1,7 +1,15 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-COMPOSE := docker compose
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
+
+COMPOSE       := docker compose
+SLURM_VERSION ?= 25.05.3
+BASE_IMAGE    ?= rockylinux:9
+IMAGE_TAG     ?= hpc-slurm-lab:latest
 
 # --- Help ---------------------------------------------------------------------
 
@@ -15,7 +23,11 @@ help:
 
 .PHONY: build
 build: ## Build the slurm image (slow first time, ~10 min).
-	$(COMPOSE) build
+	docker build \
+		--build-arg SLURM_VERSION=$(SLURM_VERSION) \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		-t $(IMAGE_TAG) \
+		./images/slurm
 
 .PHONY: up
 up: ## Start the cluster (CPU nodes only).
@@ -35,7 +47,11 @@ clean: ## Stop and delete EVERYTHING (containers, volumes, network). Software/ i
 
 .PHONY: rebuild
 rebuild: ## Rebuild image from scratch and restart.
-	$(COMPOSE) build --no-cache
+	docker build --no-cache \
+		--build-arg SLURM_VERSION=$(SLURM_VERSION) \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		-t $(IMAGE_TAG) \
+		./images/slurm
 	$(COMPOSE) up -d --force-recreate
 
 # --- Access -------------------------------------------------------------------
