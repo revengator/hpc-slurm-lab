@@ -1,0 +1,9 @@
+.env
+software/*
+!software/.gitkeep
+*.swp
+.DS_Store
+__pycache__/
+*.pyc
+.idea/
+.vscode/
