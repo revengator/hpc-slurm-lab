@@ -12,6 +12,7 @@ x-slurm-volumes: &slurm-volumes
   - munge:/etc/munge
   - ./software:/software
   - jobs:/data
+  - home:/home/admin
 
 services:
   mysql:
@@ -60,6 +61,8 @@ services:
     container_name: hpc-c1
     hostname: c1
     command: ["slurmd"]
+    privileged: true
+    cgroup: host
     volumes: *slurm-volumes
     networks: [hpc]
     depends_on:
@@ -70,6 +73,8 @@ services:
     container_name: hpc-c2
     hostname: c2
     command: ["slurmd"]
+    privileged: true
+    cgroup: host
     volumes: *slurm-volumes
     networks: [hpc]
     depends_on:
@@ -81,6 +86,8 @@ services:
     container_name: hpc-g1
     hostname: g1
     command: ["slurmd"]
+    privileged: true
+    cgroup: host
     environment:
       NODE_FEATURES: ${GPU_FEATURES:-gpu}
       NODE_GRES: ${GPU_GRES:-gpu:rtx:1}
@@ -99,6 +106,7 @@ services:
 volumes:
   munge:
   jobs:
+  home:
   mysql_data:
 
 networks:

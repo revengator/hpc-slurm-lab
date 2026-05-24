@@ -16,6 +16,7 @@ RUN dnf -y install epel-release dnf-plugins-core \
         mariadb mariadb-devel mariadb-server \
         pam-devel readline-devel libyaml-devel \
         hwloc hwloc-devel numactl-devel \
+        libbpf libbpf-devel bpftool dbus dbus-devel \
         json-c-devel http-parser-devel libjwt-devel openssl-devel \
         python3 python3-pip python3-devel \
         perl perl-ExtUtils-MakeMaker perl-Switch \
@@ -65,6 +66,7 @@ EOF
 
 COPY slurm.conf      /etc/slurm/slurm.conf
 COPY slurmdbd.conf   /etc/slurm/slurmdbd.conf
+COPY cgroup.conf     /etc/slurm/cgroup.conf
 COPY entrypoint.sh   /usr/local/bin/entrypoint.sh
 
 RUN chmod 0755 /usr/local/bin/entrypoint.sh \
