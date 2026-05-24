@@ -1,5 +1,8 @@
 # hpc-slurm-lab
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20368838.svg)](https://doi.org/10.5281/zenodo.20368838)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A minimal, modern SLURM HPC cluster you can run on your laptop with Docker
 Compose, for testing pipelines and learning. Works on **Apple Silicon (arm64)**
 and **Linux x86_64 with optional NVIDIA GPU**.
