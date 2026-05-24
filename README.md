@@ -122,6 +122,11 @@ hpc-slurm-lab/
 - **No SSH login node.** Use `make shell` to enter the controller as `admin`.
 - **GPU on macOS** is not supported (no NVIDIA on Apple Silicon).
 
+## Contributions
+
+This is a personal project published for transparency and reference.
+Pull requests are not actively reviewed — feel free to fork instead.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
