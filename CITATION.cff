@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "hpc-slurm-lab"
+abstract: >-
+  A minimal, modern SLURM HPC cluster you can run on your laptop with Docker
+  Compose, for testing bioinformatics pipelines and learning. SLURM 25.05
+  built from source on Rocky Linux 9, with Lmod and EasyBuild preinstalled,
+  dynamic node registration, and optional NVIDIA GPU support. Runs on Apple
+  Silicon (arm64) and Linux x86_64.
+type: software
+authors:
+  - family-names: "Esteve Marco"
+    given-names: "Miguel Angel"
+    email: "esteve@telemaco.es"
+    orcid: "https://orcid.org/0009-0001-7904-9645"
+repository-code: "https://github.com/revengator/hpc-slurm-lab"
+url: "https://github.com/revengator/hpc-slurm-lab"
+license: MIT
+version: "0.1.0"
+date-released: "2026-05-24"
+keywords:
+  - bioinformatics
+  - hpc
+  - slurm
+  - docker
+  - docker-compose
+  - easybuild
+  - lmod
+  - workflow
+  - reproducibility
+  - scientific-computing
+  - containers
