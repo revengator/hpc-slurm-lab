@@ -16,12 +16,12 @@ authors:
 repository-code: "https://github.com/revengator/hpc-slurm-lab"
 url: "https://github.com/revengator/hpc-slurm-lab"
 license: MIT
-version: "0.1.0"
-date-released: "2026-05-24"
+version: "0.2.0"
+date-released: "2026-06-01"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.20368838"
-    description: "Zenodo DOI for v0.1.0"
+    description: "Concept DOI — always resolves to the latest version on Zenodo"
 keywords:
   - bioinformatics
   - hpc
