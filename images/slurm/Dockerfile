@@ -51,6 +51,17 @@ RUN groupadd -r slurm --gid=995 \
 
 RUN pip3 install --no-cache-dir easybuild
 
+# Apptainer (formerly Singularity) — the HPC-native container runtime, so SLURM
+# jobs can run OCI/Docker images on the compute nodes.
+# DEV/EDUCATION ONLY: this installs the *setuid* flavour and relies on the
+# compute containers running privileged (see docker-compose.yml). A real
+# multi-tenant cluster runs Apptainer fully unprivileged instead.
+RUN dnf -y install apptainer apptainer-suid squashfs-tools fuse-overlayfs \
+ && dnf clean all && rm -rf /var/cache/dnf \
+ && conf=/etc/apptainer/apptainer.conf \
+ && sed -i '/^[# ]*allow setuid-mount squashfs/d' "$conf" \
+ && printf '\n# DEV LAB: mount squashfs via the kernel in setuid mode. The default\n# (iflimited) falls back to squashfuse/FUSE, and exec from a FUSE mount\n# fails with EINVAL on the Docker Desktop (linuxkit) kernel. A real\n# cluster would rely on signed images + ECL instead.\nallow setuid-mount squashfs = yes\n' >> "$conf"
+
 RUN useradd -m -s /bin/bash -u 1000 admin \
  && echo 'admin ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/admin \
  && chmod 440 /etc/sudoers.d/admin

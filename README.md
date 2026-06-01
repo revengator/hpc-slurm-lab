@@ -13,6 +13,8 @@ and **Linux x86_64 with optional NVIDIA GPU**.
 - `Lmod` + `EasyBuild` baked in, with a shared `/software` volume for HPC-style
   modules (`module load samtools/1.21-...`)
 - Optional NVIDIA GPU node via Docker profile (`make up-gpu`)
+- **Apptainer** (Singularity) preinstalled — run Docker/OCI images from SLURM
+  jobs, the way real HPC clusters do
 
 ## Requirements
 
@@ -80,6 +82,45 @@ module load SAMtools/1.21-GCC-13.2.0
 samtools --version
 ```
 
+## Running containers with Apptainer
+
+Real HPC clusters don't let users run Docker on the compute nodes — the Docker
+daemon runs as root, which is a non-starter on a shared system. Instead they use
+**[Apptainer](https://apptainer.org/)** (formerly Singularity), which runs
+containers rootless, as your own user, and plugs into the batch scheduler. This
+lab ships Apptainer so you can practice that exact workflow:
+
+```bash
+make test-apptainer        # submits examples/apptainer-hello.sh
+```
+
+The job pulls a tiny Alpine image straight from Docker Hub and runs it inside a
+SLURM allocation. The host node is Rocky Linux but the container reports Alpine,
+which proves it really ran inside the image:
+
+```bash
+sbatch examples/apptainer-hello.sh
+```
+
+Apptainer consumes OCI/Docker images directly, so anything on a registry works —
+including images you publish yourself:
+
+```bash
+apptainer exec docker://alpine:3 cat /etc/os-release
+apptainer pull tool.sif docker://ghcr.io/<owner>/<image>:<tag>
+apptainer run  tool.sif --help
+```
+
+(The first pull needs outbound internet on the compute node.)
+
+> ⚠️ **Development / education only.** This lab runs the SLURM compute nodes as
+> `privileged` Docker containers so Apptainer can mount and run images from
+> inside them — handy on a laptop, but not how a real cluster is built (there the
+> compute nodes are real hosts). To make image mounts work on Docker Desktop's
+> kernel it also sets `allow setuid-mount squashfs = yes` instead of relying on
+> signed images + ECL. It's a learning sandbox: don't use this configuration as a
+> template for a production cluster.
+
 ## Common commands
 
 ```bash
@@ -94,6 +135,7 @@ make logs       # follow all logs
 make status     # sinfo + squeue
 make nodes      # scontrol show nodes
 make test       # submit examples/hello.sh and print output
+make test-apptainer # run a container via Apptainer under SLURM
 ```
 
 ## Layout

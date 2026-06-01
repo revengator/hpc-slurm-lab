@@ -89,3 +89,9 @@ test: ## Submit examples/hello.sh and tail its output.
 	$(COMPOSE) cp examples/hello.sh slurmctld:/tmp/hello.sh
 	$(COMPOSE) exec --user admin slurmctld bash -lc \
 		'sbatch -W /tmp/hello.sh && cat slurm-*.out && rm -f slurm-*.out'
+
+.PHONY: test-apptainer
+test-apptainer: ## Submit examples/apptainer-hello.sh (runs a container via Apptainer).
+	$(COMPOSE) cp examples/apptainer-hello.sh slurmctld:/tmp/apptainer-hello.sh
+	$(COMPOSE) exec --user admin slurmctld bash -lc \
+		'sbatch -W /tmp/apptainer-hello.sh && cat slurm-*.out && rm -f slurm-*.out'
