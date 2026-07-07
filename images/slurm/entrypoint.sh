@@ -57,6 +57,56 @@ case "$ROLE" in
         fi
         ;;
 
+    login)
+        # SSH submit host: reachable over SSH, talks to slurmctld, runs no
+        # slurmd. This is the entry point remote/agentic tools (or a plain
+        # `ssh`) connect to in order to run sbatch/squeue/sacct against the
+        # cluster.
+        #
+        # Persist the host keys in a named volume mounted at
+        # /etc/ssh-hostkeys so the server identity stays stable across
+        # `make down && make up`. Regenerating them on every recreate is what
+        # triggers "Host key verification failed" in non-interactive SSH
+        # clients (they cannot accept a changed/unknown key at a prompt).
+        HOSTKEY_DIR=/etc/ssh-hostkeys
+        install -d -m 0755 "$HOSTKEY_DIR"
+        for t in rsa ecdsa ed25519; do
+            kf="$HOSTKEY_DIR/ssh_host_${t}_key"
+            [[ -f "$kf" ]] || ssh-keygen -q -t "$t" -f "$kf" -N ''
+        done
+
+        # Install the lab's public key for the admin user. The key is
+        # bind-mounted read-only at /etc/ssh-lab/authorized_keys by
+        # docker-compose (generated on the host by `make ssh-setup`).
+        install -d -m 0700 -o admin -g admin /home/admin/.ssh
+        if [[ -s /etc/ssh-lab/authorized_keys ]]; then
+            install -m 0600 -o admin -g admin \
+                /etc/ssh-lab/authorized_keys /home/admin/.ssh/authorized_keys
+        fi
+
+        # Optional password login (opt-in via SSH_PASSWORD). Handy for a
+        # local/home lab: set a password so `ssh-copy-id` can install a key on
+        # the first login. Leave SSH_PASSWORD empty for strict key-only auth
+        # (the default when unset). The 05- drop-in sorts before 10-hpclab.conf
+        # so its PasswordAuthentication value wins.
+        if [[ -n "${SSH_PASSWORD:-}" ]]; then
+            echo "admin:${SSH_PASSWORD}" | chpasswd
+            cat > /etc/ssh/sshd_config.d/05-hpclab-password.conf <<'EOF'
+# Enabled because SSH_PASSWORD is set (dev/home-LAN convenience).
+PasswordAuthentication yes
+EOF
+            echo "INFO: password login enabled for user 'admin'." >&2
+        elif [[ ! -s /home/admin/.ssh/authorized_keys ]]; then
+            echo "WARNING: no authorized_keys and no SSH_PASSWORD set — you" >&2
+            echo "         cannot log in. Run 'make ssh-setup' or set" >&2
+            echo "         SSH_PASSWORD in .env, then 'make up'." >&2
+        fi
+
+        # munged is already running (started above, before this case).
+        wait_for_host slurmctld 6817 || true
+        exec /usr/sbin/sshd -D -e
+        ;;
+
     bash|shell)
         exec /bin/bash -l
         ;;

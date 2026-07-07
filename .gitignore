@@ -1,6 +1,10 @@
 .env
 software/*
 !software/.gitkeep
+
+# SSH login-node key material — generated locally by `make ssh-setup`,
+# never committed.
+ssh/
 *.swp
 .DS_Store
 __pycache__/

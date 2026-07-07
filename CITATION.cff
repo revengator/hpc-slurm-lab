@@ -5,8 +5,10 @@ abstract: >-
   A minimal, modern SLURM HPC cluster you can run on your laptop with Docker
   Compose, for testing bioinformatics pipelines and learning. SLURM 25.05
   built from source on Rocky Linux 9, with Lmod and EasyBuild preinstalled,
-  dynamic node registration, and optional NVIDIA GPU support. Runs on Apple
-  Silicon (arm64) and Linux x86_64.
+  dynamic node registration, Apptainer for containerised jobs, and an SSH
+  login node for remote job submission and integration with agentic tools.
+  Optional NVIDIA GPU support. Runs on Apple Silicon (arm64) and Linux
+  x86_64.
 type: software
 authors:
   - family-names: "Esteve Marco"
@@ -16,8 +18,8 @@ authors:
 repository-code: "https://github.com/revengator/hpc-slurm-lab"
 url: "https://github.com/revengator/hpc-slurm-lab"
 license: MIT
-version: "0.2.0"
-date-released: "2026-06-01"
+version: "0.3.0"
+date-released: "2026-07-04"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.20368838"
@@ -34,3 +36,4 @@ keywords:
   - reproducibility
   - scientific-computing
   - containers
+  - ssh

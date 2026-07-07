@@ -1,0 +1,687 @@
+diff --git a/.env.example b/.env.example
+index 15e7e0f..98b7e65 100644
+--- a/.env.example
++++ b/.env.example
+@@ -10,6 +10,17 @@ BASE_IMAGE=rockylinux:9
+ # Name of the local image tag built by `make build`
+ IMAGE_TAG=hpc-slurm-lab:latest
+ 
++# Host port published by the SSH login node (maps to :22 in the container).
++# This is the port you point `ssh` or a remote-agent client at. Change it if
++# 2222 is already taken on your machine.
++SSH_PORT=2222
++
++# Password for the `admin` user on the SSH login node. Defaults to "admin"
++# when unset — a zero-config local/home lab so you can `ssh admin@host` (and
++# `ssh-copy-id` a key) with no setup. DEV/HOME-LAN ONLY; do not expose to the
++# internet. Set to empty (SSH_PASSWORD=) for strict key-only auth.
++SSH_PASSWORD=admin
++
+ # Number of CPU compute nodes (c1..cN) launched by docker compose
+ CPU_NODES=2
+ 
+diff --git a/.gitignore b/.gitignore
+index af8a8f2..ed93ad8 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,6 +1,10 @@
+ .env
+ software/*
+ !software/.gitkeep
++
++# SSH login-node key material — generated locally by `make ssh-setup`,
++# never committed.
++ssh/
+ *.swp
+ .DS_Store
+ __pycache__/
+diff --git a/.zenodo.json b/.zenodo.json
+index 548f18d..366aba0 100644
+--- a/.zenodo.json
++++ b/.zenodo.json
+@@ -1,6 +1,6 @@
+ {
+   "title": "hpc-slurm-lab: minimal modern SLURM cluster for local HPC and bioinformatics testing",
+-  "description": "A minimal, modern SLURM HPC cluster you can run on your laptop with Docker Compose, for testing bioinformatics pipelines and learning. Includes SLURM 25.05 built from source on Rocky Linux 9, Lmod and EasyBuild for HPC-style scientific module management, dynamic node registration, and optional NVIDIA GPU support. Runs on Apple Silicon (arm64) and Linux x86_64.",
++  "description": "A minimal, modern SLURM HPC cluster you can run on your laptop with Docker Compose, for testing bioinformatics pipelines and learning. Includes SLURM 25.05 built from source on Rocky Linux 9, Lmod and EasyBuild for HPC-style scientific module management, dynamic node registration, Apptainer for containerised jobs, and an SSH login node for remote job submission and integration with agentic tools. Optional NVIDIA GPU support. Runs on Apple Silicon (arm64) and Linux x86_64.",
+   "upload_type": "software",
+   "access_right": "open",
+   "license": "MIT",
+@@ -22,7 +22,8 @@
+     "reproducibility",
+     "scientific-computing",
+     "containers",
+-    "rocky-linux"
++    "rocky-linux",
++    "ssh"
+   ],
+   "related_identifiers": [
+     {
+diff --git a/CITATION.cff b/CITATION.cff
+index 7470148..64e7ae7 100644
+--- a/CITATION.cff
++++ b/CITATION.cff
+@@ -5,8 +5,10 @@ abstract: >-
+   A minimal, modern SLURM HPC cluster you can run on your laptop with Docker
+   Compose, for testing bioinformatics pipelines and learning. SLURM 25.05
+   built from source on Rocky Linux 9, with Lmod and EasyBuild preinstalled,
+-  dynamic node registration, and optional NVIDIA GPU support. Runs on Apple
+-  Silicon (arm64) and Linux x86_64.
++  dynamic node registration, Apptainer for containerised jobs, and an SSH
++  login node for remote job submission and integration with agentic tools.
++  Optional NVIDIA GPU support. Runs on Apple Silicon (arm64) and Linux
++  x86_64.
+ type: software
+ authors:
+   - family-names: "Esteve Marco"
+@@ -16,8 +18,8 @@ authors:
+ repository-code: "https://github.com/revengator/hpc-slurm-lab"
+ url: "https://github.com/revengator/hpc-slurm-lab"
+ license: MIT
+-version: "0.2.0"
+-date-released: "2026-06-01"
++version: "0.3.0"
++date-released: "2026-07-04"
+ identifiers:
+   - type: doi
+     value: "10.5281/zenodo.20368838"
+@@ -34,3 +36,4 @@ keywords:
+   - reproducibility
+   - scientific-computing
+   - containers
++  - ssh
+diff --git a/Makefile b/Makefile
+index b8eea2d..8bdbcdf 100644
+--- a/Makefile
++++ b/Makefile
+@@ -11,6 +11,13 @@ SLURM_VERSION ?= 25.05.3
+ BASE_IMAGE    ?= rockylinux:9
+ IMAGE_TAG     ?= hpc-slurm-lab:latest
+ 
++# SSH login node (used by `make ssh-setup` / `make ssh`)
++SSH_PORT      ?= 2222
++SSH_HOST      ?= localhost
++SSH_USER      ?= admin
++SSH_KEY       ?= ./ssh/id_hpclab
++SSH_PASSWORD  ?= admin
++
+ # --- Help ---------------------------------------------------------------------
+ 
+ .PHONY: help
+@@ -29,12 +36,16 @@ build: ## Build the slurm image (slow first time, ~10 min).
+ 		-t $(IMAGE_TAG) \
+ 		./images/slurm
+ 
++.PHONY: ssh-prep
++ssh-prep: ## Ensure ssh/authorized_keys exists so the bind-mount is a file, not a dir.
++	@mkdir -p ssh && touch ssh/authorized_keys
++
+ .PHONY: up
+-up: ## Start the cluster (CPU nodes only).
++up: ssh-prep ## Start the cluster (CPU nodes only).
+ 	$(COMPOSE) up -d
+ 
+ .PHONY: up-gpu
+-up-gpu: ## Start the cluster including the NVIDIA GPU node g1.
++up-gpu: ssh-prep ## Start the cluster including the NVIDIA GPU node g1.
+ 	$(COMPOSE) --profile gpu up -d
+ 
+ .PHONY: down
+@@ -42,8 +53,8 @@ down: ## Stop the cluster (keeps volumes).
+ 	$(COMPOSE) --profile gpu down
+ 
+ .PHONY: clean
+-clean: ## Stop and delete EVERYTHING (containers, volumes, network). Software/ is preserved.
+-	$(COMPOSE) --profile gpu down --volumes --remove-orphans
++clean: ## Stop and delete EVERYTHING (containers, volumes, images, network). Software/ is preserved.
++	$(COMPOSE) --profile gpu down --rmi all --volumes --remove-orphans
+ 
+ .PHONY: rebuild
+ rebuild: ## Rebuild image from scratch and restart.
+@@ -68,6 +79,96 @@ root: ## Interactive shell on slurmctld as root.
+ logs: ## Follow logs (Ctrl+C to stop).
+ 	$(COMPOSE) logs -f
+ 
++# --- SSH login node (for remote submit / agentic tools) ----------------------
++
++.PHONY: ssh-setup
++ssh-setup: ## Generate the lab SSH key + authorized_keys and print connection info.
++	@mkdir -p ssh
++	@if [[ ! -f "$(SSH_KEY)" ]]; then \
++		ssh-keygen -t ed25519 -N '' -C 'hpc-slurm-lab' -f "$(SSH_KEY)" >/dev/null; \
++		echo "Generated new keypair: $(SSH_KEY)[.pub]"; \
++	else \
++		echo "Reusing existing keypair: $(SSH_KEY)"; \
++	fi
++	@cp "$(SSH_KEY).pub" ssh/authorized_keys
++	@chmod 600 "$(SSH_KEY)" ssh/authorized_keys
++	@echo
++	@echo "SSH login node provisioned. If the cluster is already up, run:"
++	@echo "    make up        # (re)create the login container to pick up the key"
++	@echo
++	@$(MAKE) --no-print-directory ssh-config
++
++.PHONY: ssh-config
++ssh-config: ## Print the connection block for SSH / remote-agent setup.
++	@echo "──────────────────────────────────────────────────────────────"
++	@echo " Connect to this cluster over SSH"
++	@echo "──────────────────────────────────────────────────────────────"
++	@echo "  Host             : $(SSH_HOST)   (use this machine's LAN IP from another box)"
++	@echo "  Port             : $(SSH_PORT)"
++	@echo "  User             : $(SSH_USER)"
++	@echo "  Scheduler        : SLURM (sbatch / squeue / sacct)"
++	@if [[ -n "$(SSH_PASSWORD)" ]]; then \
++		echo "  Password         : $(SSH_PASSWORD)   (dev/home-LAN only)"; \
++	fi
++	@if [[ -f "$(SSH_KEY)" ]]; then \
++		echo "  Private key      : $(abspath $(SSH_KEY))"; \
++		echo; \
++		echo "  Test from a shell:"; \
++		echo "    ssh -i $(abspath $(SSH_KEY)) -p $(SSH_PORT) $(SSH_USER)@$(SSH_HOST) sinfo"; \
++	else \
++		echo; \
++		echo "  No key yet. Either 'make ssh-setup' to generate one, or log in"; \
++		echo "  with the password and 'ssh-copy-id -p $(SSH_PORT) $(SSH_USER)@$(SSH_HOST)'."; \
++		echo "  Test from a shell:"; \
++		echo "    ssh -p $(SSH_PORT) $(SSH_USER)@$(SSH_HOST) sinfo"; \
++	fi
++	@echo
++	@echo "  For non-interactive / agentic SSH clients, register the Host/Port/User"
++	@echo "  above with the private key (recommended) — key auth is required when"
++	@echo "  the client cannot answer an interactive password prompt."
++	@echo
++	@echo "  Non-interactive clients cannot accept an unknown host key at a prompt."
++	@echo "  Add this block to ~/.ssh/config so the first connection is trusted"
++	@echo "  automatically:"
++	@echo
++	@echo "    Host hpc-slurm-lab"
++	@echo "        HostName $(SSH_HOST)"
++	@echo "        Port $(SSH_PORT)"
++	@echo "        User $(SSH_USER)"
++	@if [[ -f "$(SSH_KEY)" ]]; then echo "        IdentityFile $(abspath $(SSH_KEY))"; fi
++	@echo "        StrictHostKeyChecking accept-new"
++	@echo
++	@echo "  Then just: ssh hpc-slurm-lab sinfo"
++	@echo "  If you rebuilt the cluster and now get 'host key verification failed',"
++	@echo "  run 'make ssh-fix-hostkey' once to forget the stale key."
++	@echo "──────────────────────────────────────────────────────────────"
++
++.PHONY: ssh-copy-id
++ssh-copy-id: ## Install your SSH key on the login node (uses the admin password once).
++	@if [[ ! -f "$(SSH_KEY)" ]]; then \
++		echo "No key at $(SSH_KEY) — run 'make ssh-setup' first."; exit 1; \
++	fi
++	ssh-copy-id -i "$(SSH_KEY).pub" -p $(SSH_PORT) \
++		-o StrictHostKeyChecking=accept-new \
++		-o UserKnownHostsFile=./ssh/known_hosts \
++		$(SSH_USER)@$(SSH_HOST)
++
++.PHONY: ssh
++ssh: ## Open an interactive SSH session on the login node as admin.
++	ssh -i $(SSH_KEY) -p $(SSH_PORT) \
++		-o StrictHostKeyChecking=accept-new \
++		-o UserKnownHostsFile=./ssh/known_hosts \
++		$(SSH_USER)@$(SSH_HOST)
++
++.PHONY: ssh-fix-hostkey
++ssh-fix-hostkey: ## Forget a stale host key (fixes "host key verification failed" after a rebuild).
++	@ssh-keygen -R "[$(SSH_HOST)]:$(SSH_PORT)" >/dev/null 2>&1 || true
++	@rm -f ssh/known_hosts
++	@echo "Cleared stale host key for [$(SSH_HOST)]:$(SSH_PORT) from ~/.ssh/known_hosts"
++	@echo "and the repo-local ssh/known_hosts. The next connection will re-learn it."
++	@echo "Host keys now persist in the 'ssh_hostkeys' volume, so this should be a"
++	@echo "one-time fix (they survive 'make down && make up'; only 'make clean' resets them)."
++
+ # --- Cluster info -------------------------------------------------------------
+ 
+ .PHONY: status
+diff --git a/README.md b/README.md
+index a5502b9..beb0c71 100644
+--- a/README.md
++++ b/README.md
+@@ -15,10 +15,14 @@ and **Linux x86_64 with optional NVIDIA GPU**.
+ - Optional NVIDIA GPU node via Docker profile (`make up-gpu`)
+ - **Apptainer** (Singularity) preinstalled — run Docker/OCI images from SLURM
+   jobs, the way real HPC clusters do
++- **SSH login node** — submit jobs remotely, or wire the cluster into any
++  SSH-capable client or agent as a compute target (`make ssh-setup`)
+ 
+ ## Requirements
+ 
+-- Docker 24+ with Compose v2
++- Docker 24+ with Compose v2 — the daemon must be **running** (start Docker
++  Desktop, or `systemctl start docker` on Linux) before any `make` target that
++  builds or starts containers
+ - ~3 GB free disk for the built image
+ - For GPU: Linux host with NVIDIA driver + `nvidia-container-toolkit`
+ 
+@@ -42,6 +46,114 @@ squeue
+ sacct
+ ```
+ 
++## Use over SSH
++
++This lab ships an **SSH login node** — a submit host that runs `sshd`, shares
++the cluster's `munge` key and `slurm.conf`, and talks to `slurmctld` — so you
++can drive it over SSH exactly like a real HPC cluster.
++
++The login node is a standard OpenSSH server that accepts key-based auth and
++exposes the SLURM CLI (`sbatch` / `squeue` / `sacct`). Anything that can open an
++SSH connection with a private key connects the same way — an AI agent or
++assistant, a CI runner, a plain `ssh` command, or a script. If your client
++supports registering an SSH "compute target" or "remote host", point it at the
++Host / Port / User / key that `make ssh-setup` prints.
++
++```bash
++make ssh-setup   # generate the lab keypair + print the connection block
++make up          # start the cluster (now includes the `login` node)
++make ssh         # optional: open an interactive session to sanity-check
++```
++
++`make ssh-setup` creates an ed25519 keypair under `./ssh/` (gitignored) and
++prints everything you need:
++
++```
++  Host             : localhost   (use this machine's LAN IP from another box)
++  Port             : 2222
++  User             : admin
++  Private key      : /path/to/hpc-slurm-lab/ssh/id_hpclab
++  Scheduler        : SLURM (sbatch / squeue / sacct)
++```
++
++Register that Host / Port / User and the private key with your client — most
++SSH-based agents and tools have an "add SSH host" or "add remote compute" form
++where you paste them. Reprint the block any time with `make ssh-config`.
++
++### First connection — step by step
++
++The cluster side is fully scriptable; **registering the host with a client is a
++one-time manual step** (pasting a private key and opening an outbound SSH
++connection is a decision the human makes, not the agent). Start to finish:
++
++1. **Docker running** — start Docker Desktop (or `systemctl start docker`).
++2. **`make ssh-setup`** — creates `./ssh/id_hpclab` and prints the connection
++   block (Host / Port / User / key path).
++3. **`make up`** — starts the cluster, including the `login` node on port 2222.
++4. **Register the host** with your client:
++   - *Agents / tools with an SSH-host form*: paste Host / Port / User and the
++     contents of `./ssh/id_hpclab` (the private key) into their "add SSH host"
++     or "add remote compute" dialog.
++   - *A plain SSH client*: add a block to `~/.ssh/config` (the one printed by
++     `make ssh-setup`) and connect with `ssh hpc-slurm-lab`.
++5. **First connect may hit a host-key prompt.** A non-interactive client
++   (like an agent) cannot accept an unknown host key at a prompt, so either use
++   `StrictHostKeyChecking accept-new` in your `~/.ssh/config` (the printed block
++   already does), or — if you rebuilt the cluster and a *stale* key is cached —
++   run `make ssh-fix-hostkey` once. See the host-key note under
++   [Notes & caveats](#notes--caveats).
++
++Once registered, just ask the agent (or run the client) to submit work:
++`sbatch`, `squeue`, `sacct` all run over that one SSH connection.
++
++**On this laptop**, use `localhost:2222`. **On another machine at home**, run
++the same three commands there and connect to that machine's LAN IP on the same
++port (the login node listens on all interfaces). Change the port with
++`SSH_PORT=... make up` or by setting `SSH_PORT` in `.env`.
++
++Verify the path end-to-end from any shell:
++
++```bash
++ssh -i ./ssh/id_hpclab -p 2222 admin@localhost sinfo
++ssh -i ./ssh/id_hpclab -p 2222 admin@localhost \
++    "sbatch --wrap='hostname; sleep 3' && squeue"
++```
++
++### Authentication: password and/or key
++
++For a zero-config local/home lab, the login node ships with a **default
++password** (`admin` / `admin`) so you can log in immediately:
++
++```bash
++ssh -p 2222 admin@localhost          # password: admin
++```
++
++The simplest way to add a key from any machine — no file juggling — is to log
++in once with the password and let `ssh-copy-id` install your key:
++
++```bash
++make ssh-setup                       # once, to create a local keypair
++make ssh-copy-id                     # asks for the password once, installs the key
++# or, from a machine that already has its own key:
++ssh-copy-id -p 2222 admin@<host>
++```
++
++`ssh-copy-id` **appends** to the login node's `authorized_keys`, so repeat it
++from each machine you want to connect from — no need to disable the password
++afterward. Change or disable the password by setting `SSH_PASSWORD` in `.env`
++(`SSH_PASSWORD=` empty → strict key-only auth).
++
++> **Agents need a key.** A non-interactive client (an agent, a CI runner, any
++> automated SSH connection) can't answer a password prompt, so register the
++> cluster with the private key (`make ssh-setup` → paste `./ssh/id_hpclab`), not
++> the password. The password is for your own interactive logins and for
++> bootstrapping keys with `ssh-copy-id`.
++
++> ⚠️ **Dev/home-LAN only.** The default `admin`/`admin` password and the
++> published port are meant for a laptop or a trusted home network. Do **not**
++> expose this to the public internet. For a hardened setup, set `SSH_PASSWORD=`
++> (empty) for key-only auth; root login is always disabled.
++
+ ## With NVIDIA GPU (Linux only)
+ 
+ ```bash
+@@ -57,7 +169,8 @@ Adjust `GPU_GRES` in `.env` to match your card (e.g. `gpu:rtx4090:1`).
+ |-------------|---------------------------------------------------|
+ | `mysql`     | MariaDB 11 — accounting backend                   |
+ | `slurmdbd`  | Accounting daemon (`sacct`, `sreport`)            |
+-| `slurmctld` | SLURM controller — entry point for users          |
++| `slurmctld` | SLURM controller                                  |
++| `login`     | SSH submit host — entry point for users and SSH agents |
+ | `c1`, `c2`  | CPU compute nodes (dynamically registered)        |
+ | `g1`        | GPU compute node (profile `gpu`)                  |
+ 
+@@ -128,9 +241,14 @@ make build      # build image
+ make up         # start CPU cluster
+ make up-gpu     # start CPU + GPU
+ make down       # stop, keep volumes
+-make clean      # stop + delete volumes (DB, munge, jobs)
++make clean      # stop + delete EVERYTHING (containers, volumes, images, network)
+ make rebuild    # rebuild image no-cache and recreate
+ make shell      # shell on controller as admin
++make ssh-setup  # generate SSH key + print connection block
++make ssh-copy-id# install your key on the login node (password login once)
++make ssh        # SSH into the login node as admin
++make ssh-config # reprint the SSH connection block
++make ssh-fix-hostkey # forget a stale host key after a rebuild
+ make logs       # follow all logs
+ make status     # sinfo + squeue
+ make nodes      # scontrol show nodes
+@@ -147,7 +265,7 @@ hpc-slurm-lab/
+ ├── .env.example
+ ├── images/slurm/
+ │   ├── Dockerfile          # Rocky 9 + SLURM 25.05 from source + EasyBuild + Lmod
+-│   ├── entrypoint.sh       # role switcher (slurmctld | slurmdbd | slurmd)
++│   ├── entrypoint.sh       # role switcher (slurmctld | slurmdbd | slurmd | login)
+ │   ├── slurm.conf
+ │   └── slurmdbd.conf
+ ├── examples/
+@@ -164,7 +282,14 @@ hpc-slurm-lab/
+   packages when you actually need inter-node MPI.
+ - **slurm.conf changes** require `make reconfigure` (live) or `make rebuild`
+   (full rebuild) — it's baked into the image, not a host file.
+-- **No SSH login node.** Use `make shell` to enter the controller as `admin`.
++- **SSH login node** (`make ssh-setup`) for remote submit from any SSH client
++  or agent; `make shell` still drops you onto the controller directly for quick
++  checks.
++- **SSH host keys persist** in the `ssh_hostkeys` volume, so the login node
++  keeps the same identity across `make down && make up`. A `make clean` wipes
++  that volume, so the next `make up` generates fresh host keys — if a client
++  that connected before now reports `host key verification failed`, run
++  `make ssh-fix-hostkey` once to forget the stale key.
+ - **GPU on macOS** is not supported (no NVIDIA on Apple Silicon).
+ 
+ ## Contributions
+diff --git a/VERIFY.md b/VERIFY.md
+new file mode 100644
+index 0000000..8bc5fb5
+--- /dev/null
++++ b/VERIFY.md
+@@ -0,0 +1,106 @@
++# Verification checklist — SSH login node (v0.3.0)
++
++Run these on the host where Docker is installed. They validate the new SSH
++submit path end-to-end. Expected result is noted after each step.
++
++## 1. Build the image (picks up sshd config + login role)
++
++```bash
++make build          # or: make rebuild   (~10 min first time)
++```
++
++Expect: image `hpc-slurm-lab:latest` built with no errors.
++
++## 2. Provision the SSH key
++
++```bash
++make ssh-setup
++```
++
++Expect: a keypair at `./ssh/id_hpclab[.pub]`, `./ssh/authorized_keys`, and a
++printed connection block (Host / Port / User / private key path). Re-running is
++idempotent (reuses the existing key).
++
++## 3. Start the cluster (now includes the `login` node)
++
++```bash
++make up
++docker compose ps        # or: make status
++```
++
++Expect: `hpc-login` container running and healthy alongside
++`slurmctld`, `slurmdbd`, `mysql`, `c1`, `c2`. Port 2222 published on the host.
++
++## 4. Verify SSH + SLURM from the host shell
++
++```bash
++ssh -i ./ssh/id_hpclab -p 2222 admin@localhost sinfo
++```
++
++Expect: partition `main` listed with nodes `c1`,`c2` in `idle`/`mixed` state.
++
++```bash
++ssh -i ./ssh/id_hpclab -p 2222 admin@localhost \
++    "sbatch --wrap='hostname; sleep 3' && sleep 5 && squeue && sacct -n"
++```
++
++Expect: `Submitted batch job <N>`, the job visible in `squeue`, and an
++accounting row from `sacct` (proves the login node reaches slurmdbd too).
++
++Password login (default `admin`/`admin`, dev/home-LAN only):
++
++```bash
++ssh -p 2222 admin@localhost sinfo        # password: admin
++```
++
++Expect: logs in with the password and prints `sinfo`.
++
++One-time key install with `ssh-copy-id` (the simplest multi-machine flow):
++
++```bash
++make ssh-copy-id                          # asks for the password once
++ssh -i ./ssh/id_hpclab -p 2222 admin@localhost sinfo   # now key-only, no prompt
++```
++
++Expect: the second command succeeds without a password. Repeat `ssh-copy-id`
++from each machine you connect from — it appends, never overwrites.
++
++Optional hardening — strict key-only auth:
++
++```bash
++echo 'SSH_PASSWORD=' >> .env && make up    # recreate login with password off
++ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
++    -p 2222 admin@localhost true
++```
++
++Expect: `Permission denied (publickey)` (password refused).
++
++## 5. Register with a remote-agent / SSH client
++
++`make ssh-config` reprints the block. In your agentic tool's SSH/compute
++host settings, enter Host/Port/User and paste the private key
++(`./ssh/id_hpclab`). Then ask it to run a test `sbatch`.
++
++## 6. From another machine on your home network
++
++On the second machine (clone the repo, `make build`, `make ssh-setup`,
++`make up`), connect from elsewhere using that machine's LAN IP:
++
++```bash
++ssh -i ./ssh/id_hpclab -p 2222 admin@<LAN-IP> sinfo
++```
++
++Expect: same `sinfo` output. If it hangs, check the host firewall allows
++inbound on `SSH_PORT` (2222).
++
++---
++
++### Teardown
++
++```bash
++make down     # stop, keep volumes
++make clean    # stop + delete volumes (DB, munge, jobs)
++```
++
++The `./ssh/` keys are local and gitignored; delete the folder to rotate them,
++then re-run `make ssh-setup && make up`.
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 18197e0..9399a05 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -9,10 +9,10 @@ x-slurm-image: &slurm-image
+       BASE_IMAGE: ${BASE_IMAGE:-rockylinux:9}
+ 
+ x-slurm-volumes: &slurm-volumes
+-  - munge:/etc/munge
+-  - ./software:/software
+-  - jobs:/data
+-  - home:/home/admin
++  - &slurm-image-munge munge:/etc/munge
++  - &slurm-image-software ./software:/software
++  - &slurm-image-jobs jobs:/data
++  - &slurm-image-home home:/home/admin
+ 
+ services:
+   mysql:
+@@ -56,6 +56,29 @@ services:
+     depends_on:
+       - slurmdbd
+ 
++  login:
++    <<: *slurm-image
++    container_name: hpc-login
++    hostname: login
++    command: ["login"]
++    environment:
++      # Password login for the `admin` user. Defaults to "admin" for a
++      # zero-config local/home lab (dev only). Set SSH_PASSWORD= (empty) in
++      # .env for strict key-only auth.
++      SSH_PASSWORD: "${SSH_PASSWORD-admin}"
++    volumes:
++      - *slurm-image-munge
++      - *slurm-image-software
++      - *slurm-image-jobs
++      - *slurm-image-home
++      - ./ssh/authorized_keys:/etc/ssh-lab/authorized_keys:ro
++      - ssh_hostkeys:/etc/ssh-hostkeys
++    networks: [hpc]
++    ports:
++      - "${SSH_PORT:-2222}:22"
++    depends_on:
++      - slurmctld
++
+   c1:
+     <<: *slurm-image
+     container_name: hpc-c1
+@@ -108,6 +131,7 @@ volumes:
+   jobs:
+   home:
+   mysql_data:
++  ssh_hostkeys:
+ 
+ networks:
+   hpc:
+diff --git a/images/slurm/Dockerfile b/images/slurm/Dockerfile
+index 679427c..bb70f46 100644
+--- a/images/slurm/Dockerfile
++++ b/images/slurm/Dockerfile
+@@ -75,6 +75,29 @@ export EASYBUILD_INSTALLPATH=/software
+ export MODULEPATH=/software/modules/all:${MODULEPATH:-}
+ EOF
+ 
++# SSH submit host (the `login` role in entrypoint.sh). openssh-server is
++# already installed above. sshd only ever starts under the login role, so
++# this is inert for slurmctld/slurmdbd/slurmd containers.
++# DEV/EDUCATION ONLY: password auth is disabled and only the admin user may
++# log in with the lab keypair generated by `make ssh-setup`.
++RUN mkdir -p /var/run/sshd \
++ && mkdir -p /etc/ssh/sshd_config.d \
++ && cat > /etc/ssh/sshd_config.d/10-hpclab.conf <<'EOF'
++# hpc-slurm-lab: SSH submit-host policy
++PermitRootLogin no
++PasswordAuthentication no
++KbdInteractiveAuthentication no
++PubkeyAuthentication yes
++AllowUsers admin
++X11Forwarding no
++PrintMotd no
++# Persistent host keys (created by entrypoint.sh in the ssh-hostkeys volume)
++# so the server identity survives `make down && make up`.
++HostKey /etc/ssh-hostkeys/ssh_host_rsa_key
++HostKey /etc/ssh-hostkeys/ssh_host_ecdsa_key
++HostKey /etc/ssh-hostkeys/ssh_host_ed25519_key
++EOF
++
+ COPY slurm.conf      /etc/slurm/slurm.conf
+ COPY slurmdbd.conf   /etc/slurm/slurmdbd.conf
+ COPY cgroup.conf     /etc/slurm/cgroup.conf
+diff --git a/images/slurm/entrypoint.sh b/images/slurm/entrypoint.sh
+index 0158321..b3197df 100644
+--- a/images/slurm/entrypoint.sh
++++ b/images/slurm/entrypoint.sh
+@@ -57,6 +57,56 @@ case "$ROLE" in
+         fi
+         ;;
+ 
++    login)
++        # SSH submit host: reachable over SSH, talks to slurmctld, runs no
++        # slurmd. This is the entry point remote/agentic tools (or a plain
++        # `ssh`) connect to in order to run sbatch/squeue/sacct against the
++        # cluster.
++        #
++        # Persist the host keys in a named volume mounted at
++        # /etc/ssh-hostkeys so the server identity stays stable across
++        # `make down && make up`. Regenerating them on every recreate is what
++        # triggers "Host key verification failed" in non-interactive SSH
++        # clients (they cannot accept a changed/unknown key at a prompt).
++        HOSTKEY_DIR=/etc/ssh-hostkeys
++        install -d -m 0755 "$HOSTKEY_DIR"
++        for t in rsa ecdsa ed25519; do
++            kf="$HOSTKEY_DIR/ssh_host_${t}_key"
++            [[ -f "$kf" ]] || ssh-keygen -q -t "$t" -f "$kf" -N ''
++        done
++
++        # Install the lab's public key for the admin user. The key is
++        # bind-mounted read-only at /etc/ssh-lab/authorized_keys by
++        # docker-compose (generated on the host by `make ssh-setup`).
++        install -d -m 0700 -o admin -g admin /home/admin/.ssh
++        if [[ -s /etc/ssh-lab/authorized_keys ]]; then
++            install -m 0600 -o admin -g admin \
++                /etc/ssh-lab/authorized_keys /home/admin/.ssh/authorized_keys
++        fi
++
++        # Optional password login (opt-in via SSH_PASSWORD). Handy for a
++        # local/home lab: set a password so `ssh-copy-id` can install a key on
++        # the first login. Leave SSH_PASSWORD empty for strict key-only auth
++        # (the default when unset). The 05- drop-in sorts before 10-hpclab.conf
++        # so its PasswordAuthentication value wins.
++        if [[ -n "${SSH_PASSWORD:-}" ]]; then
++            echo "admin:${SSH_PASSWORD}" | chpasswd
++            cat > /etc/ssh/sshd_config.d/05-hpclab-password.conf <<'EOF'
++# Enabled because SSH_PASSWORD is set (dev/home-LAN convenience).
++PasswordAuthentication yes
++EOF
++            echo "INFO: password login enabled for user 'admin'." >&2
++        elif [[ ! -s /home/admin/.ssh/authorized_keys ]]; then
++            echo "WARNING: no authorized_keys and no SSH_PASSWORD set — you" >&2
++            echo "         cannot log in. Run 'make ssh-setup' or set" >&2
++            echo "         SSH_PASSWORD in .env, then 'make up'." >&2
++        fi
++
++        # munged is already running (started above, before this case).
++        wait_for_host slurmctld 6817 || true
++        exec /usr/sbin/sshd -D -e
++        ;;
++
+     bash|shell)
+         exec /bin/bash -l
+         ;;

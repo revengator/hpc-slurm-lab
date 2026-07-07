@@ -9,10 +9,10 @@ x-slurm-image: &slurm-image
       BASE_IMAGE: ${BASE_IMAGE:-rockylinux:9}
 
 x-slurm-volumes: &slurm-volumes
-  - munge:/etc/munge
-  - ./software:/software
-  - jobs:/data
-  - home:/home/admin
+  - &slurm-image-munge munge:/etc/munge
+  - &slurm-image-software ./software:/software
+  - &slurm-image-jobs jobs:/data
+  - &slurm-image-home home:/home/admin
 
 services:
   mysql:
@@ -55,6 +55,29 @@ services:
       - "6817:6817"
     depends_on:
       - slurmdbd
+
+  login:
+    <<: *slurm-image
+    container_name: hpc-login
+    hostname: login
+    command: ["login"]
+    environment:
+      # Password login for the `admin` user. Defaults to "admin" for a
+      # zero-config local/home lab (dev only). Set SSH_PASSWORD= (empty) in
+      # .env for strict key-only auth.
+      SSH_PASSWORD: "${SSH_PASSWORD-admin}"
+    volumes:
+      - *slurm-image-munge
+      - *slurm-image-software
+      - *slurm-image-jobs
+      - *slurm-image-home
+      - ./ssh/authorized_keys:/etc/ssh-lab/authorized_keys:ro
+      - ssh_hostkeys:/etc/ssh-hostkeys
+    networks: [hpc]
+    ports:
+      - "${SSH_PORT:-2222}:22"
+    depends_on:
+      - slurmctld
 
   c1:
     <<: *slurm-image
@@ -108,6 +131,7 @@ volumes:
   jobs:
   home:
   mysql_data:
+  ssh_hostkeys:
 
 networks:
   hpc:
